@@ -59,6 +59,14 @@ const (
 	TypeMultipart  = "multipart"
 )
 
+type superAgentRetryable struct {
+	RetryableStatus []int
+	RetryerTime     time.Duration
+	RetryerCount    int
+	Attempt         int
+	Enable          bool
+}
+
 // A SuperAgent is a object storing all request data for client.
 type SuperAgent struct {
 	Url               string
@@ -81,15 +89,10 @@ type SuperAgent struct {
 	Debug             bool
 	CurlCommand       bool
 	logger            Logger
-	Retryable         struct {
-		RetryableStatus []int
-		RetryerTime     time.Duration
-		RetryerCount    int
-		Attempt         int
-		Enable          bool
-	}
+	Retryable         superAgentRetryable
 	//If true prevents clearing Superagent data and makes it possible to reuse it for the next requests
 	DoNotClearSuperAgent bool
+	isClone              bool
 }
 
 var DisableTransportSwap = false
@@ -121,10 +124,120 @@ func New() *SuperAgent {
 		Debug:             debug,
 		CurlCommand:       false,
 		logger:            log.New(os.Stderr, "[gorequest]", log.LstdFlags),
+		isClone:           false,
 	}
 	// disable keep alives by default, see this issue https://github.com/parnurzeal/gorequest/issues/75
 	s.Transport.DisableKeepAlives = true
 	return s
+}
+
+func cloneMapArray(old map[string][]string) map[string][]string {
+	newMap := make(map[string][]string, len(old))
+	for k, vals := range old {
+		newMap[k] = make([]string, len(vals))
+		for i := range vals {
+			newMap[k][i] = vals[i]
+		}
+	}
+	return newMap
+}
+func shallowCopyData(old map[string]interface{}) map[string]interface{} {
+	if old == nil {
+		return nil
+	}
+	newData := make(map[string]interface{})
+	for k, val := range old {
+		newData[k] = val
+	}
+	return newData
+}
+func shallowCopyDataSlice(old []interface{}) []interface{} {
+	if old == nil {
+		return nil
+	}
+	newData := make([]interface{}, len(old))
+	for i := range old {
+		newData[i] = old[i]
+	}
+	return newData
+}
+func shallowCopyFileArray(old []File) []File {
+	if old == nil {
+		return nil
+	}
+	newData := make([]File, len(old))
+	for i := range old {
+		newData[i] = old[i]
+	}
+	return newData
+}
+func shallowCopyCookies(old []*http.Cookie) []*http.Cookie {
+	if old == nil {
+		return nil
+	}
+	newData := make([]*http.Cookie, len(old))
+	for i := range old {
+		newData[i] = old[i]
+	}
+	return newData
+}
+func shallowCopyErrors(old []error) []error {
+	if old == nil {
+		return nil
+	}
+	newData := make([]error, len(old))
+	for i := range old {
+		newData[i] = old[i]
+	}
+	return newData
+}
+
+// just need to change the array pointer?
+func copyRetryable(old superAgentRetryable) superAgentRetryable {
+	newRetryable := old
+	newRetryable.RetryableStatus = make([]int, len(old.RetryableStatus))
+	for i := range old.RetryableStatus {
+		newRetryable.RetryableStatus[i] = old.RetryableStatus[i]
+	}
+	return newRetryable
+}
+
+// Returns a copy of this superagent. Useful if you want to reuse the client/settings
+// concurrently.
+// Note: This does a shallow copy of the parent. So you will need to be
+// careful of Data provided
+// Note: It also directly re-uses the client and transport. If you modify the Timeout,
+// or RedirectPolicy on a clone, the clone will have a new http.client. It is recommended
+// that the base request set your timeout and redirect polices, and no modification of
+// the client or transport happen after cloning.
+// Note: DoNotClearSuperAgent is forced to "true" after Clone
+func (s *SuperAgent) Clone() *SuperAgent {
+	clone := &SuperAgent{
+		Url:                  s.Url,
+		Method:               s.Method,
+		Header:               http.Header(cloneMapArray(s.Header)),
+		TargetType:           s.TargetType,
+		ForceType:            s.ForceType,
+		Data:                 shallowCopyData(s.Data),
+		SliceData:            shallowCopyDataSlice(s.SliceData),
+		FormData:             url.Values(cloneMapArray(s.FormData)),
+		QueryData:            url.Values(cloneMapArray(s.QueryData)),
+		FileData:             shallowCopyFileArray(s.FileData),
+		BounceToRawString:    s.BounceToRawString,
+		RawString:            s.RawString,
+		Client:               s.Client,
+		Transport:            s.Transport,
+		Cookies:              shallowCopyCookies(s.Cookies),
+		Errors:               shallowCopyErrors(s.Errors),
+		BasicAuth:            s.BasicAuth,
+		Debug:                s.Debug,
+		CurlCommand:          s.CurlCommand,
+		logger:               s.logger, // thread safe.. anyway
+		Retryable:            copyRetryable(s.Retryable),
+		DoNotClearSuperAgent: true,
+		isClone:              true,
+	}
+	return clone
 }
 
 // Enable the debug mode which logs request/response detail
